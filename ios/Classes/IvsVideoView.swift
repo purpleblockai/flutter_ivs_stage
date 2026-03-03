@@ -21,11 +21,13 @@ class IvsVideoViewFactory: NSObject, FlutterPlatformViewFactory {
 
 class IvsVideoView: NSObject, FlutterPlatformView {
     private var _view: UIView
+    private let viewId: Int64
     private var participantId: String?
     private var isLocal: Bool = false
 
     init(frame: CGRect, viewIdentifier viewId: Int64, arguments args: Any?, binaryMessenger messenger: FlutterBinaryMessenger?) {
         _view = UIView()
+        self.viewId = viewId
         super.init()
         createNativeView(view: _view)
         
@@ -34,7 +36,7 @@ class IvsVideoView: NSObject, FlutterPlatformView {
             participantId = arguments["participantId"] as? String
             isLocal = arguments["isLocal"] as? Bool ?? false
         }
-        print("Ivsstage: Participant: \(String(describing: participantId)), Local: \(isLocal)")
+        print("IvsVideoView: register(viewId=\(viewId), participantId=\(participantId ?? "nil"), isLocal=\(isLocal))")
         
         // Register this view with the stage manager
         registerWithStageManager()
@@ -54,23 +56,24 @@ class IvsVideoView: NSObject, FlutterPlatformView {
         guard let stageManager = FlutterIvsStagePlugin.shared?.stageManager else { return }
         
         if isLocal {
-            print("Ivsstage: Registering local video view")
+            print("IvsVideoView: attaching local viewId=\(viewId)")
             // For local participant, set up camera preview
             stageManager.setLocalVideoView(_view)
         } else if let participantId = participantId {
-            print("Ivsstage: Registering remote video view for participant: \(participantId)")
+            print("IvsVideoView: attaching remote viewId=\(viewId), participantId=\(participantId)")
             // For remote participants, register this view for the participant
             stageManager.setVideoView(_view, for: participantId)
         }
     }
     
     deinit {
-        // Clean up registration
+        print("IvsVideoView: dispose(viewId=\(viewId), participantId=\(participantId ?? "nil"), isLocal=\(isLocal))")
+        // Clean up registration — pass view reference so we only remove if it's still the active view
         if let stageManager = FlutterIvsStagePlugin.shared?.stageManager {
             if isLocal {
-                stageManager.removeLocalVideoView()
+                stageManager.removeLocalVideoView(_view)
             } else if let participantId = participantId {
-                stageManager.removeVideoView(for: participantId)
+                stageManager.removeVideoView(for: participantId, view: _view)
             }
         }
     }

@@ -10,6 +10,7 @@ class StageParticipant {
   final bool wantsAudioOnly;
   final bool requiresAudioOnly;
   final String broadcastSlotName;
+  final Map<String, String> attributes;
 
   const StageParticipant({
     required this.isLocal,
@@ -20,6 +21,7 @@ class StageParticipant {
     this.wantsAudioOnly = false,
     this.requiresAudioOnly = false,
     required this.broadcastSlotName,
+    this.attributes = const {},
   });
 
   /// Whether the participant is currently in audio-only mode
@@ -53,6 +55,9 @@ class StageParticipant {
       wantsAudioOnly: map['wantsAudioOnly'] ?? false,
       requiresAudioOnly: map['requiresAudioOnly'] ?? false,
       broadcastSlotName: map['broadcastSlotName'] ?? '',
+      attributes: (map['attributes'] as Map?)
+              ?.map((k, v) => MapEntry(k.toString(), v.toString())) ??
+          const {},
     );
   }
 
@@ -66,6 +71,7 @@ class StageParticipant {
       'wantsAudioOnly': wantsAudioOnly,
       'requiresAudioOnly': requiresAudioOnly,
       'broadcastSlotName': broadcastSlotName,
+      'attributes': attributes,
     };
   }
 
@@ -78,6 +84,7 @@ class StageParticipant {
     bool? wantsAudioOnly,
     bool? requiresAudioOnly,
     String? broadcastSlotName,
+    Map<String, String>? attributes,
   }) {
     return StageParticipant(
       isLocal: isLocal ?? this.isLocal,
@@ -88,6 +95,7 @@ class StageParticipant {
       wantsAudioOnly: wantsAudioOnly ?? this.wantsAudioOnly,
       requiresAudioOnly: requiresAudioOnly ?? this.requiresAudioOnly,
       broadcastSlotName: broadcastSlotName ?? this.broadcastSlotName,
+      attributes: attributes ?? this.attributes,
     );
   }
 

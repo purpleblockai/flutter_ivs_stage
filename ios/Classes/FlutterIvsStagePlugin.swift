@@ -17,7 +17,8 @@ public class FlutterIvsStagePlugin: NSObject, FlutterPlugin {
     private var localVideoMutedEventChannel: FlutterEventChannel?
     private var broadcastingEventChannel: FlutterEventChannel?
     private var errorEventChannel: FlutterEventChannel?
-    
+    private var screenShareEventChannel: FlutterEventChannel?
+
     // Event sinks
     public var participantsEventSink: FlutterEventSink?
     public var connectionStateEventSink: FlutterEventSink?
@@ -25,6 +26,7 @@ public class FlutterIvsStagePlugin: NSObject, FlutterPlugin {
     public var localVideoMutedEventSink: FlutterEventSink?
     public var broadcastingEventSink: FlutterEventSink?
     public var errorEventSink: FlutterEventSink?
+    public var screenShareEventSink: FlutterEventSink?
     
     public static func register(with registrar: FlutterPluginRegistrar) {
         let methodChannel = FlutterMethodChannel(name: "flutter_ivs_stage", binaryMessenger: registrar.messenger())
@@ -45,7 +47,8 @@ public class FlutterIvsStagePlugin: NSObject, FlutterPlugin {
         instance.localVideoMutedEventChannel = FlutterEventChannel(name: "flutter_ivs_stage/local_video_muted", binaryMessenger: registrar.messenger())
         instance.broadcastingEventChannel = FlutterEventChannel(name: "flutter_ivs_stage/broadcasting", binaryMessenger: registrar.messenger())
         instance.errorEventChannel = FlutterEventChannel(name: "flutter_ivs_stage/error", binaryMessenger: registrar.messenger())
-        
+        instance.screenShareEventChannel = FlutterEventChannel(name: "flutter_ivs_stage/screen_share", binaryMessenger: registrar.messenger())
+
         // Set event handlers
         instance.participantsEventChannel?.setStreamHandler(ParticipantsStreamHandler(instance))
         instance.connectionStateEventChannel?.setStreamHandler(ConnectionStateStreamHandler(instance))
@@ -53,7 +56,8 @@ public class FlutterIvsStagePlugin: NSObject, FlutterPlugin {
         instance.localVideoMutedEventChannel?.setStreamHandler(LocalVideoMutedStreamHandler(instance))
         instance.broadcastingEventChannel?.setStreamHandler(BroadcastingStreamHandler(instance))
         instance.errorEventChannel?.setStreamHandler(ErrorStreamHandler(instance))
-        
+        instance.screenShareEventChannel?.setStreamHandler(ScreenShareStreamHandler(instance))
+
         registrar.addMethodCallDelegate(instance, channel: methodChannel)
         
         // Initialize stage manager
@@ -184,7 +188,131 @@ public class FlutterIvsStagePlugin: NSObject, FlutterPlugin {
         case "stopPreview":
             stageManager.stopPreview()
             result(nil)
-            
+
+        case "toggleScreenShare":
+            let token = (call.arguments as? [String: Any])?["token"] as? String
+            if stageManager.isScreenSharing {
+                stageManager.stopScreenShare()
+                result(nil)
+            } else {
+                stageManager.startScreenShare(token: token) { error in
+                    if let error = error {
+                        result(FlutterError(code: "SCREEN_SHARE_FAILED",
+                            message: error.localizedDescription, details: nil))
+                    } else {
+                        result(nil)
+                    }
+                }
+            }
+
+        case "setSpeakerphoneOn":
+            if let args = call.arguments as? [String: Any],
+               let on = args["on"] as? Bool {
+                let session = AVAudioSession.sharedInstance()
+                do {
+                    try session.overrideOutputAudioPort(on ? .speaker : .none)
+                    result(nil)
+                } catch {
+                    result(FlutterError(code: "AUDIO_OUTPUT_FAILED",
+                        message: error.localizedDescription, details: nil))
+                }
+            } else {
+                result(FlutterError(code: "INVALID_ARGUMENTS",
+                    message: "'on' boolean is required", details: nil))
+            }
+
+        case "selectAudioOutput":
+            if let args = call.arguments as? [String: Any],
+               let deviceId = args["deviceId"] as? String {
+                let session = AVAudioSession.sharedInstance()
+                let lowerId = deviceId.lowercased().trimmingCharacters(in: .whitespaces)
+
+                if lowerId == "speaker" {
+                    do {
+                        try session.overrideOutputAudioPort(.speaker)
+                        result(nil)
+                    } catch {
+                        result(FlutterError(code: "AUDIO_OUTPUT_FAILED",
+                            message: error.localizedDescription, details: nil))
+                    }
+                } else {
+                    // Clear speaker override first
+                    try? session.overrideOutputAudioPort(.none)
+
+                    // Try to find a matching input port (Bluetooth, headset, etc.)
+                    if let availableInputs = session.availableInputs {
+                        for port in availableInputs {
+                            if port.uid == deviceId || port.portName.lowercased() == lowerId {
+                                do {
+                                    try session.setPreferredInput(port)
+                                    result(nil)
+                                    return
+                                } catch {
+                                    result(FlutterError(code: "AUDIO_OUTPUT_FAILED",
+                                        message: error.localizedDescription, details: nil))
+                                    return
+                                }
+                            }
+                        }
+                    }
+                    // No matching port found — clear preferred input (use default)
+                    try? session.setPreferredInput(nil)
+                    result(nil)
+                }
+            } else {
+                result(FlutterError(code: "INVALID_ARGUMENTS",
+                    message: "deviceId is required", details: nil))
+            }
+
+        case "selectAudioInput":
+            if let args = call.arguments as? [String: Any],
+               let deviceId = args["deviceId"] as? String {
+                let session = AVAudioSession.sharedInstance()
+                let lowerId = deviceId.lowercased().trimmingCharacters(in: .whitespaces)
+
+                do {
+                    if lowerId.isEmpty || lowerId == "internal-mic" || lowerId == "internal" || lowerId == "default" {
+                        try session.setPreferredInput(nil)
+                        result(nil)
+                        return
+                    }
+
+                    guard let availableInputs = session.availableInputs else {
+                        result(FlutterError(code: "AUDIO_INPUT_FAILED",
+                            message: "No audio input devices available", details: nil))
+                        return
+                    }
+
+                    let matchedPort = availableInputs.first { port in
+                        let uid = port.uid.lowercased()
+                        let name = port.portName.lowercased()
+                        let type = port.portType.rawValue.lowercased()
+                        return uid == lowerId ||
+                            name == lowerId ||
+                            uid.contains(lowerId) ||
+                            name.contains(lowerId) ||
+                            type.contains(lowerId) ||
+                            lowerId.contains(uid) ||
+                            lowerId.contains(name)
+                    }
+
+                    guard let inputPort = matchedPort else {
+                        result(FlutterError(code: "AUDIO_INPUT_FAILED",
+                            message: "Requested audio input is unavailable", details: nil))
+                        return
+                    }
+
+                    try session.setPreferredInput(inputPort)
+                    result(nil)
+                } catch {
+                    result(FlutterError(code: "AUDIO_INPUT_FAILED",
+                        message: error.localizedDescription, details: nil))
+                }
+            } else {
+                result(FlutterError(code: "INVALID_ARGUMENTS",
+                    message: "deviceId is required", details: nil))
+            }
+
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -238,6 +366,10 @@ extension FlutterIvsStagePlugin: StageManagerDelegate {
             "source": source ?? "Unknown"
         ]
         errorEventSink?(errorMap)
+    }
+
+    func stageManager(_ manager: StageManager, didChangeScreenShareState sharing: Bool) {
+        screenShareEventSink?(sharing)
     }
 }
 
@@ -335,18 +467,36 @@ class BroadcastingStreamHandler: NSObject, FlutterStreamHandler {
 
 class ErrorStreamHandler: NSObject, FlutterStreamHandler {
     private weak var plugin: FlutterIvsStagePlugin?
-    
+
     init(_ plugin: FlutterIvsStagePlugin) {
         self.plugin = plugin
     }
-    
+
     func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
         plugin?.errorEventSink = events
         return nil
     }
-    
+
     func onCancel(withArguments arguments: Any?) -> FlutterError? {
         plugin?.errorEventSink = nil
+        return nil
+    }
+}
+
+class ScreenShareStreamHandler: NSObject, FlutterStreamHandler {
+    private weak var plugin: FlutterIvsStagePlugin?
+
+    init(_ plugin: FlutterIvsStagePlugin) {
+        self.plugin = plugin
+    }
+
+    func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+        plugin?.screenShareEventSink = events
+        return nil
+    }
+
+    func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        plugin?.screenShareEventSink = nil
         return nil
     }
 }

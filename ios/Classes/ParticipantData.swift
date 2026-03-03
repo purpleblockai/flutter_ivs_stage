@@ -9,7 +9,8 @@ class ParticipantData {
     var streams: [IVSStageStream] = []
     var wantsAudioOnly = false
     var requiresAudioOnly = false
-    
+    var attributes: [String: String] = [:]
+
     var isAudioOnly: Bool {
         return wantsAudioOnly || requiresAudioOnly
     }
@@ -25,9 +26,10 @@ class ParticipantData {
         }
     }
 
-    init(isLocal: Bool, participantId: String?) {
+    init(isLocal: Bool, participantId: String?, attributes: [String: String] = [:]) {
         self.isLocal = isLocal
         self.participantId = participantId
+        self.attributes = attributes
     }
     
     func toMap() -> [String: Any] {
@@ -47,7 +49,8 @@ class ParticipantData {
             "streams": streamMaps,
             "wantsAudioOnly": wantsAudioOnly,
             "requiresAudioOnly": requiresAudioOnly,
-            "broadcastSlotName": broadcastSlotName
+            "broadcastSlotName": broadcastSlotName,
+            "attributes": attributes
         ]
     }
 }

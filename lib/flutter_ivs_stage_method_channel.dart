@@ -29,6 +29,9 @@ class MethodChannelFlutterIvsStage extends FlutterIvsStagePlatform {
     'flutter_ivs_stage/broadcasting',
   );
   final _errorEventChannel = const EventChannel('flutter_ivs_stage/error');
+  final _screenShareEventChannel = const EventChannel(
+    'flutter_ivs_stage/screen_share',
+  );
 
   Stream<List<StageParticipant>>? _participantsStream;
   Stream<StageConnectionState>? _connectionStateStream;
@@ -36,6 +39,7 @@ class MethodChannelFlutterIvsStage extends FlutterIvsStagePlatform {
   Stream<bool>? _localVideoMutedStream;
   Stream<bool>? _broadcastingStream;
   Stream<StageError>? _errorStream;
+  Stream<bool>? _screenShareStream;
 
   @override
   Future<String?> getPlatformVersion() async {
@@ -169,6 +173,7 @@ class MethodChannelFlutterIvsStage extends FlutterIvsStagePlatform {
     _localVideoMutedStream = null;
     _broadcastingStream = null;
     _errorStream = null;
+    _screenShareStream = null;
   }
 
   @override
@@ -208,5 +213,39 @@ class MethodChannelFlutterIvsStage extends FlutterIvsStagePlatform {
   @override
   Future<void> stopPreview() async {
     await methodChannel.invokeMethod('stopPreview');
+  }
+
+  @override
+  Future<void> toggleScreenShare({String? token}) async {
+    await methodChannel.invokeMethod('toggleScreenShare', {
+      if (token != null) 'token': token,
+    });
+  }
+
+  @override
+  Stream<bool> get screenShareStream {
+    _screenShareStream ??= _screenShareEventChannel
+        .receiveBroadcastStream()
+        .map<bool>((data) => data == true);
+    return _screenShareStream!;
+  }
+
+  @override
+  Future<void> setSpeakerphoneOn(bool on) async {
+    await methodChannel.invokeMethod('setSpeakerphoneOn', {'on': on});
+  }
+
+  @override
+  Future<void> selectAudioOutput(String deviceId) async {
+    await methodChannel.invokeMethod('selectAudioOutput', {
+      'deviceId': deviceId,
+    });
+  }
+
+  @override
+  Future<void> selectAudioInput(String deviceId) async {
+    await methodChannel.invokeMethod('selectAudioInput', {
+      'deviceId': deviceId,
+    });
   }
 }

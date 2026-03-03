@@ -1,15 +1,42 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../flutter_ivs_stage.dart';
 
+/// Google Meet-style avatar colors (same palette as participant_tile.dart).
+const _avatarColors = [
+  Color(0xFF2563EB), // blue-600
+  Color(0xFF9333EA), // purple-600
+  Color(0xFFDB2777), // pink-600
+  Color(0xFF4F46E5), // indigo-600
+  Color(0xFF7C3AED), // violet-600
+  Color(0xFFC026D3), // fuchsia-600
+  Color(0xFF0891B2), // cyan-600
+  Color(0xFF0D9488), // teal-600
+  Color(0xFF059669), // emerald-600
+  Color(0xFF16A34A), // green-600
+  Color(0xFF65A30D), // lime-600
+  Color(0xFFD97706), // amber-600
+  Color(0xFFEA580C), // orange-600
+  Color(0xFFDC2626), // red-600
+  Color(0xFFE11D48), // rose-600
+];
+
 /// Widget for displaying a participant's video stream
 class ParticipantVideoView extends StatelessWidget {
+  static final Set<String> _missingRemoteIdWarnings = <String>{};
+
   final StageParticipant participant;
   final bool showControls;
   final bool showOverlays;
   final bool isCompact;
   final bool showVideoPreview;
+  final String? displayName;
+  final String? roleLabel;
+  final String? avatarUrl;
+  final String? participantUid;
 
   const ParticipantVideoView({
     super.key,
@@ -18,36 +45,55 @@ class ParticipantVideoView extends StatelessWidget {
     this.showOverlays = true,
     this.isCompact = false,
     this.showVideoPreview = true,
+    this.displayName,
+    this.roleLabel,
+    this.avatarUrl,
+    this.participantUid,
   });
+
+  Color _avatarColor() {
+    final uid = participantUid ?? participant.participantId ?? '';
+    return _avatarColors[uid.hashCode.abs() % _avatarColors.length];
+  }
+
+  String _initials() {
+    final name = displayName?.trim() ?? '';
+    if (name.isEmpty) return '?';
+    return name[0].toUpperCase();
+  }
+
+  String _resolvedDisplayName() {
+    final name = displayName ??
+        (participant.isLocal
+            ? 'You (${participant.participantId ?? 'Disconnected'})'
+            : participant.participantId ?? 'Unknown');
+    if (roleLabel != null && roleLabel!.isNotEmpty) {
+      return '$name ($roleLabel)';
+    }
+    return name;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isAudioActive = !(participant.audioStream?.isMuted ?? true);
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.black,
         borderRadius: BorderRadius.circular(8),
-        border: !showOverlays
-            ? null
-            : Border.all(color: _getBorderColor(), width: _getBorderWidth()),
+        border: showOverlays && isAudioActive
+            ? Border.all(color: Colors.green, width: 3.0)
+            : null,
       ),
       child: Stack(
+        fit: StackFit.expand,
         children: [
-          // Video content
           _buildVideoContent(),
           if (showOverlays) ...[
-            // Overlays
             if (!isCompact) ...[
-              // Participant info
               _buildParticipantInfo(),
-
-              // State indicators
-              _buildStateIndicators(),
-
-              // Audio only toggle (for remote participants)
-              if (showControls && !participant.isLocal)
-                _buildAudioOnlyToggle(context),
+              _buildStreamStatusIndicators(),
             ] else ...[
-              // Compact view overlays
               _buildCompactOverlay(),
             ],
           ],
@@ -58,57 +104,99 @@ class ParticipantVideoView extends StatelessWidget {
 
   Widget _buildVideoContent() {
     final videoStream = participant.videoStream;
+    final hasVideoStream = videoStream != null;
     final isVideoMuted = videoStream?.isMuted ?? true;
+    final participantId = participant.participantId;
+    final hasRemoteId =
+        participant.isLocal || (participantId?.trim().isNotEmpty ?? false);
+    final shouldRenderPlatformView =
+        showVideoPreview && hasRemoteId && hasVideoStream && !isVideoMuted;
 
-    // If video preview is disabled, always show placeholder
-    if (!showVideoPreview || isVideoMuted || participant.isAudioOnly) {
-      // Show avatar placeholder
+    if (!participant.isLocal && !hasRemoteId) {
+      final warnKey = (participantUid?.trim().isNotEmpty ?? false)
+          ? participantUid!.trim()
+          : ((displayName?.trim().isNotEmpty ?? false)
+                ? displayName!.trim()
+                : 'unknown_remote');
+      if (_missingRemoteIdWarnings.add(warnKey)) {
+        debugPrint(
+          'ParticipantVideoView: skipping remote platform view due to missing participantId (key=$warnKey)',
+        );
+      }
+    }
+
+    // Keep rendering attached while a video stream exists.
+    // IVS mute flags can be briefly stale during stream transitions.
+    if (!shouldRenderPlatformView) {
+      final radius = isCompact ? 20.0 : 40.0;
+
+      Widget avatarWidget;
+      if (displayName != null && displayName!.trim().isNotEmpty) {
+        avatarWidget = CircleAvatar(
+          radius: radius,
+          backgroundColor: _avatarColor(),
+          child: Text(
+            _initials(),
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: radius * 0.7,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        );
+      } else if (avatarUrl != null && avatarUrl!.isNotEmpty) {
+        avatarWidget = CircleAvatar(
+          radius: radius,
+          backgroundImage: NetworkImage(avatarUrl!),
+          backgroundColor: _avatarColor(),
+        );
+      } else {
+        avatarWidget = CircleAvatar(
+          radius: radius,
+          backgroundColor: Colors.grey[600],
+          child: Icon(Icons.person, size: radius, color: Colors.white),
+        );
+      }
+
       return Container(
         width: double.infinity,
         height: double.infinity,
         decoration: BoxDecoration(
-          color: Colors.grey[800],
+          color: const Color(0xFF0F172A),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircleAvatar(
-              radius: isCompact ? 20 : 40,
-              backgroundColor: Colors.grey[600],
-              child: Icon(
-                Icons.person,
-                size: isCompact ? 20 : 40,
-                color: Colors.white,
-              ),
-            ),
-            if (!isCompact) ...[
-              const SizedBox(height: 8),
-              Text(
-                !showVideoPreview
-                    ? participant.participantId ?? 'User'
-                    : isVideoMuted
-                    ? 'Camera Off'
-                    : 'Audio Only',
-                style: TextStyle(color: Colors.grey[400], fontSize: 12),
-              ),
-            ],
-          ],
-        ),
+        child: Center(child: avatarWidget),
       );
     }
 
-    // Show actual video stream using platform view (only when showVideoPreview is true)
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: UiKitView(
-        viewType: 'ivs_video_view',
-        creationParams: {
-          'participantId': participant.participantId,
-          'isLocal': participant.isLocal,
-        },
-        creationParamsCodec: const StandardMessageCodec(),
+    final creationParams = <String, dynamic>{
+      'participantId': participantId,
+      'isLocal': participant.isLocal,
+    };
+
+    if (Platform.isAndroid) {
+      return SizedBox.expand(
+        child: _buildAndroidVideoView(creationParams),
+      );
+    }
+
+    return SizedBox.expand(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: UiKitView(
+          viewType: 'ivs_video_view',
+          creationParams: creationParams,
+          creationParamsCodec: const StandardMessageCodec(),
+        ),
       ),
+    );
+  }
+
+  Widget _buildAndroidVideoView(Map<String, dynamic> creationParams) {
+    return AndroidView(
+      viewType: 'ivs_video_view',
+      creationParams: creationParams,
+      creationParamsCodec: const StandardMessageCodec(),
     );
   }
 
@@ -117,116 +205,53 @@ class ParticipantVideoView extends StatelessWidget {
       top: 8,
       left: 8,
       child: Container(
+        constraints: const BoxConstraints(maxWidth: 200),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
           color: Colors.black.withValues(alpha: .7),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Text(
-          participant.isLocal
-              ? 'You (${participant.participantId ?? 'Disconnected'})'
-              : participant.participantId ?? 'Unknown',
+          _resolvedDisplayName(),
           style: const TextStyle(
             color: Colors.white,
             fontSize: 12,
             fontWeight: FontWeight.w500,
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
       ),
     );
   }
 
-  Widget _buildStateIndicators() {
+  Widget _buildStreamStatusIndicators() {
+    final isAudioMuted = participant.audioStream?.isMuted ?? true;
+    final isVideoMuted = participant.videoStream?.isMuted ?? true;
+
     return Positioned(
       bottom: 8,
       right: 8,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Publish state
-          Container(
-            width: 20,
-            height: 20,
-            margin: const EdgeInsets.only(left: 4),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: .7),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              participant.publishState == StageParticipantPublishState.published
-                  ? Icons.upload
-                  : Icons.upload_outlined,
-              size: 12,
-              color:
-                  participant.publishState ==
-                      StageParticipantPublishState.published
-                  ? Colors.green
-                  : Colors.grey,
-            ),
+          _StatusIcon(
+            icon: isAudioMuted ? Icons.mic_off : Icons.mic,
+            isMuted: isAudioMuted,
           ),
-
-          // Subscribe state (for remote participants)
-          if (!participant.isLocal)
-            Container(
-              width: 20,
-              height: 20,
-              margin: const EdgeInsets.only(left: 4),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: .7),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                participant.subscribeState ==
-                        StageParticipantSubscribeState.subscribed
-                    ? Icons.download
-                    : Icons.download_outlined,
-                size: 12,
-                color:
-                    participant.subscribeState ==
-                        StageParticipantSubscribeState.subscribed
-                    ? Colors.green
-                    : Colors.grey,
-              ),
-            ),
+          const SizedBox(width: 4),
+          _StatusIcon(
+            icon: isVideoMuted ? Icons.videocam_off : Icons.videocam,
+            isMuted: isVideoMuted,
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildAudioOnlyToggle(BuildContext context) {
-    return Positioned(
-      top: 8,
-      right: 8,
-      child: GestureDetector(
-        onTap: () {
-          if (participant.participantId != null) {
-            FlutterIvsStage.toggleAudioOnlySubscribe(
-              participant.participantId!,
-            );
-            HapticFeedback.lightImpact();
-          }
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: participant.isAudioOnly ? Colors.orange : Colors.blue,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            'Audio Only:\n${participant.isAudioOnly ? 'YES' : 'NO'}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 10,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildCompactOverlay() {
+    final name = displayName ??
+        (participant.isLocal ? 'You' : participant.participantId ?? 'Unknown');
     return Positioned(
       bottom: 4,
       left: 4,
@@ -238,7 +263,7 @@ class ParticipantVideoView extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
         ),
         child: Text(
-          participant.isLocal ? 'You' : participant.participantId ?? 'Unknown',
+          name,
           style: const TextStyle(
             color: Colors.white,
             fontSize: 10,
@@ -251,29 +276,28 @@ class ParticipantVideoView extends StatelessWidget {
       ),
     );
   }
+}
 
-  Color _getBorderColor() {
-    final audioStream = participant.audioStream;
-    final isAudioMuted = audioStream?.isMuted ?? true;
+class _StatusIcon extends StatelessWidget {
+  const _StatusIcon({required this.icon, required this.isMuted});
 
-    if (isAudioMuted) {
-      return Colors.red;
-    }
+  final IconData icon;
+  final bool isMuted;
 
-    // In a real implementation, you would get volume level from the stream
-    // For now, we'll use a static color
-    return Colors.green;
-  }
-
-  double _getBorderWidth() {
-    final audioStream = participant.audioStream;
-    final isAudioMuted = audioStream?.isMuted ?? true;
-
-    if (isAudioMuted) {
-      return 2.0;
-    }
-
-    // In a real implementation, volume level would determine border width
-    return 3.0;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: .7),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Icon(
+        icon,
+        size: 14,
+        color: isMuted ? Colors.red : Colors.white,
+      ),
+    );
   }
 }

@@ -166,6 +166,41 @@ class FlutterIvsStage {
     return _platform.stopPreview();
   }
 
+  /// Toggle screen share on/off
+  ///
+  /// [token] - Optional stage token for dual-stage screen share.
+  /// When provided, creates a second Stage connection dedicated to screen share.
+  /// When null, falls back to single-stage behavior.
+  static Future<void> toggleScreenShare({String? token}) {
+    return _platform.toggleScreenShare(token: token);
+  }
+
+  /// Stream of screen share state
+  static Stream<bool> get screenShareStream {
+    return _platform.screenShareStream;
+  }
+
+  /// Set speakerphone on or off for audio output routing.
+  ///
+  /// When [on] is true, audio is routed to the device speaker.
+  /// When [on] is false, audio is routed to the earpiece (or default device).
+  static Future<void> setSpeakerphoneOn(bool on) {
+    return _platform.setSpeakerphoneOn(on);
+  }
+
+  /// Select a specific audio output device by its device ID.
+  ///
+  /// Use this for Bluetooth, wired headset, or other external audio devices.
+  /// For speaker/earpiece switching, prefer [setSpeakerphoneOn].
+  static Future<void> selectAudioOutput(String deviceId) {
+    return _platform.selectAudioOutput(deviceId);
+  }
+
+  /// Select a specific audio input device by its device ID.
+  static Future<void> selectAudioInput(String deviceId) {
+    return _platform.selectAudioInput(deviceId);
+  }
+
   /// Local participant object representing the user
   static StageParticipant? get localParticipant {
     return StageParticipant(

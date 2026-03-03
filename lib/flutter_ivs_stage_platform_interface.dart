@@ -135,4 +135,33 @@ abstract class FlutterIvsStagePlatform extends PlatformInterface {
   Future<void> stopPreview() {
     throw UnimplementedError('stopPreview() has not been implemented.');
   }
+
+  /// Toggle screen share on/off
+  ///
+  /// [token] - Optional stage token for dual-stage screen share.
+  /// When provided, creates a second Stage connection dedicated to screen share.
+  /// When null, falls back to single-stage behavior.
+  Future<void> toggleScreenShare({String? token}) {
+    throw UnimplementedError('toggleScreenShare() has not been implemented.');
+  }
+
+  /// Stream of screen share state
+  Stream<bool> get screenShareStream {
+    throw UnimplementedError('screenShareStream has not been implemented.');
+  }
+
+  /// Set speakerphone on or off for audio output routing.
+  Future<void> setSpeakerphoneOn(bool on) {
+    throw UnimplementedError('setSpeakerphoneOn() has not been implemented.');
+  }
+
+  /// Select a specific audio output device by its device ID.
+  Future<void> selectAudioOutput(String deviceId) {
+    throw UnimplementedError('selectAudioOutput() has not been implemented.');
+  }
+
+  /// Select a specific audio input device by its device ID.
+  Future<void> selectAudioInput(String deviceId) {
+    throw UnimplementedError('selectAudioInput() has not been implemented.');
+  }
 }
