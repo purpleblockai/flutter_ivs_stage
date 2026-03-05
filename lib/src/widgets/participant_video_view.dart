@@ -57,9 +57,11 @@ class ParticipantVideoView extends StatelessWidget {
   }
 
   String _initials() {
-    final name = displayName?.trim() ?? '';
+    var name = displayName?.trim() ?? '';
+    if (name.startsWith('@')) name = name.substring(1).trimLeft();
     if (name.isEmpty) return '?';
-    return name[0].toUpperCase();
+    final match = RegExp(r'[A-Za-z0-9]').firstMatch(name);
+    return match?.group(0)?.toUpperCase() ?? name[0].toUpperCase();
   }
 
   String _resolvedDisplayName() {
@@ -80,7 +82,6 @@ class ParticipantVideoView extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: Colors.black,
-        borderRadius: BorderRadius.circular(8),
         border: showOverlays && isAudioActive
             ? Border.all(color: Colors.green, width: 3.0)
             : null,
@@ -128,10 +129,16 @@ class ParticipantVideoView extends StatelessWidget {
     // Keep rendering attached while a video stream exists.
     // IVS mute flags can be briefly stale during stream transitions.
     if (!shouldRenderPlatformView) {
-      final radius = isCompact ? 20.0 : 40.0;
+      final radius = isCompact ? 20.0 : 28.0;
 
       Widget avatarWidget;
-      if (displayName != null && displayName!.trim().isNotEmpty) {
+      if (avatarUrl != null && avatarUrl!.isNotEmpty) {
+        avatarWidget = CircleAvatar(
+          radius: radius,
+          backgroundImage: NetworkImage(avatarUrl!),
+          backgroundColor: _avatarColor(),
+        );
+      } else if (displayName != null && displayName!.trim().isNotEmpty) {
         avatarWidget = CircleAvatar(
           radius: radius,
           backgroundColor: _avatarColor(),
@@ -144,27 +151,16 @@ class ParticipantVideoView extends StatelessWidget {
             ),
           ),
         );
-      } else if (avatarUrl != null && avatarUrl!.isNotEmpty) {
-        avatarWidget = CircleAvatar(
-          radius: radius,
-          backgroundImage: NetworkImage(avatarUrl!),
-          backgroundColor: _avatarColor(),
-        );
       } else {
         avatarWidget = CircleAvatar(
           radius: radius,
-          backgroundColor: Colors.grey[600],
+          backgroundColor: _avatarColor(),
           child: Icon(Icons.person, size: radius, color: Colors.white),
         );
       }
 
-      return Container(
-        width: double.infinity,
-        height: double.infinity,
-        decoration: BoxDecoration(
-          color: const Color(0xFF0F172A),
-          borderRadius: BorderRadius.circular(8),
-        ),
+      return ColoredBox(
+        color: Colors.black,
         child: Center(child: avatarWidget),
       );
     }
@@ -181,13 +177,10 @@ class ParticipantVideoView extends StatelessWidget {
     }
 
     return SizedBox.expand(
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: UiKitView(
-          viewType: 'ivs_video_view',
-          creationParams: creationParams,
-          creationParamsCodec: const StandardMessageCodec(),
-        ),
+      child: UiKitView(
+        viewType: 'ivs_video_view',
+        creationParams: creationParams,
+        creationParamsCodec: const StandardMessageCodec(),
       ),
     );
   }
