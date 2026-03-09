@@ -44,7 +44,7 @@ class _JoinStageWidgetState extends State<JoinStageWidget> {
     try {
       await FlutterIvsStage.joinStage(token);
     } catch (e) {
-      _showError('Failed to join stage: $e');
+      _showError('Failed to Join: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -66,7 +66,7 @@ class _JoinStageWidgetState extends State<JoinStageWidget> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const Text(
-          'Join Stage',
+          'Join',
           style: TextStyle(
             color: Colors.white,
             fontSize: 18,
@@ -115,7 +115,7 @@ class _JoinStageWidgetState extends State<JoinStageWidget> {
                   ),
                 )
               : const Text(
-                  'Join Stage',
+                  'Join',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                 ),
         ),
