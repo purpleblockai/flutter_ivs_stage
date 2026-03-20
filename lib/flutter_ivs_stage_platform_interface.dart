@@ -141,7 +141,11 @@ abstract class FlutterIvsStagePlatform extends PlatformInterface {
   /// [token] - Optional stage token for dual-stage screen share.
   /// When provided, creates a second Stage connection dedicated to screen share.
   /// When null, falls back to single-stage behavior.
-  Future<void> toggleScreenShare({String? token}) {
+  Future<void> toggleScreenShare({
+    String? token,
+    String? appGroupIdentifier,
+    String? broadcastExtensionBundleId,
+  }) {
     throw UnimplementedError('toggleScreenShare() has not been implemented.');
   }
 

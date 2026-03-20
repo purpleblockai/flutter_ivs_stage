@@ -216,9 +216,16 @@ class MethodChannelFlutterIvsStage extends FlutterIvsStagePlatform {
   }
 
   @override
-  Future<void> toggleScreenShare({String? token}) async {
+  Future<void> toggleScreenShare({
+    String? token,
+    String? appGroupIdentifier,
+    String? broadcastExtensionBundleId,
+  }) async {
     await methodChannel.invokeMethod('toggleScreenShare', {
       if (token != null) 'token': token,
+      if (appGroupIdentifier != null) 'appGroupIdentifier': appGroupIdentifier,
+      if (broadcastExtensionBundleId != null)
+        'broadcastExtensionBundleId': broadcastExtensionBundleId,
     });
   }
 

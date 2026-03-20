@@ -171,8 +171,16 @@ class FlutterIvsStage {
   /// [token] - Optional stage token for dual-stage screen share.
   /// When provided, creates a second Stage connection dedicated to screen share.
   /// When null, falls back to single-stage behavior.
-  static Future<void> toggleScreenShare({String? token}) {
-    return _platform.toggleScreenShare(token: token);
+  static Future<void> toggleScreenShare({
+    String? token,
+    String? appGroupIdentifier,
+    String? broadcastExtensionBundleId,
+  }) {
+    return _platform.toggleScreenShare(
+      token: token,
+      appGroupIdentifier: appGroupIdentifier,
+      broadcastExtensionBundleId: broadcastExtensionBundleId,
+    );
   }
 
   /// Stream of screen share state

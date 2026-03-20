@@ -190,7 +190,18 @@ public class FlutterIvsStagePlugin: NSObject, FlutterPlugin {
             result(nil)
 
         case "toggleScreenShare":
-            let token = (call.arguments as? [String: Any])?["token"] as? String
+            let args = call.arguments as? [String: Any]
+            let token = args?["token"] as? String
+            let appGroupId = args?["appGroupIdentifier"] as? String
+            let extensionBundleId = args?["broadcastExtensionBundleId"] as? String
+
+            if let appGroupId = appGroupId {
+                stageManager.broadcastAppGroupIdentifier = appGroupId
+            }
+            if let extensionBundleId = extensionBundleId {
+                stageManager.broadcastExtensionBundleId = extensionBundleId
+            }
+
             if stageManager.isScreenSharing {
                 stageManager.stopScreenShare()
                 result(nil)

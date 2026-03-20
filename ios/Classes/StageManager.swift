@@ -83,6 +83,12 @@ class StageManager: NSObject {
     private var screenShareStage: IVSStage?
     private var screenShareStrategy: ScreenShareStageStrategy?
     private(set) var isScreenSharing = false
+    private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
+
+    // Broadcast extension support
+    private var broadcastServer: BroadcastScreenShareServer?
+    var broadcastExtensionBundleId: String?
+    var broadcastAppGroupIdentifier: String?
 
     private var broadcastSlots: [IVSMixerSlotConfiguration] = [] {
         didSet {
@@ -241,45 +247,32 @@ class StageManager: NSObject {
     
     @objc
     private func applicationDidEnterBackground() {
-        print("app did enter background")
+        print("Ivsstage: app did enter background")
         let stageState = stageConnectionState
         let connectingOrConnected = (stageState == .connecting) || (stageState == .connected)
 
         if connectingOrConnected {
-            if isScreenSharing {
-                // Keep publishing when screen sharing in background
-                // RPScreenRecorder continues capturing entire device screen
-                // Camera may freeze but screen share stays active
-                // Only switch remote participants to audio only
-                participantsData
-                    .compactMap { $0.participantId }
-                    .forEach {
-                        mutatingParticipant($0) { data in
-                            data.requiresAudioOnly = true
-                        }
+            // Keep stage connection and publishing alive in background
+            beginBackgroundTask()
+
+            // Switch remote participants to audio only to save resources
+            participantsData
+                .compactMap { $0.participantId }
+                .forEach {
+                    mutatingParticipant($0) { data in
+                        data.requiresAudioOnly = true
                     }
-                stage?.refreshStrategy()
-            } else {
-                // Normal background behavior: stop publishing
-                localUserWantsPublish = false
-                participantsData
-                    .compactMap { $0.participantId }
-                    .forEach {
-                        mutatingParticipant($0) { data in
-                            data.requiresAudioOnly = true
-                        }
-                    }
-                stage?.refreshStrategy()
-            }
+                }
+            stage?.refreshStrategy()
         }
     }
-    
+
     @objc
     private func applicationWillEnterForeground() {
-        print("app did resume foreground")
-        // Resume publishing when entering foreground
-        localUserWantsPublish = true
-        
+        print("Ivsstage: app did resume foreground")
+        // End background task if active
+        endBackgroundTaskIfNeeded()
+
         // Resume other participants from audio only subscribe
         if !participantsData.isEmpty {
             participantsData
@@ -289,9 +282,33 @@ class StageManager: NSObject {
                         data.requiresAudioOnly = false
                     }
                 }
-            
+
             stage?.refreshStrategy()
         }
+
+        // Re-attach local video preview
+        DispatchQueue.main.async { [weak self] in
+            self?.setupLocalVideoPreview()
+        }
+    }
+
+    // MARK: - Background Task
+
+    private func beginBackgroundTask() {
+        guard backgroundTaskId == .invalid else { return }
+        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "IVSScreenShare") { [weak self] in
+            // Expiration handler — iOS is about to suspend us
+            print("Ivsstage: background task expired")
+            self?.endBackgroundTaskIfNeeded()
+        }
+        print("Ivsstage: began background task")
+    }
+
+    private func endBackgroundTaskIfNeeded() {
+        guard backgroundTaskId != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskId)
+        backgroundTaskId = .invalid
+        print("Ivsstage: ended background task")
     }
     
     // MARK: - Public Methods
@@ -324,7 +341,9 @@ class StageManager: NSObject {
         print("Ivsstage: Leaving stage")
         cancelAllRemoteAttachRetries()
         if isScreenSharing {
-            RPScreenRecorder.shared().stopCapture(handler: nil)
+            if broadcastServer == nil {
+                RPScreenRecorder.shared().stopCapture(handler: nil)
+            }
             cleanupScreenShare()
         }
         stage?.leave()
@@ -514,6 +533,116 @@ class StageManager: NSObject {
             return
         }
 
+        if let appGroup = broadcastAppGroupIdentifier, !appGroup.isEmpty {
+            startBroadcastExtensionScreenShare(token: token, appGroup: appGroup, completion: completion)
+        } else {
+            startInAppScreenShare(token: token, completion: completion)
+        }
+    }
+
+    // MARK: Broadcast Extension Screen Share
+
+    private func startBroadcastExtensionScreenShare(token: String?, appGroup: String, completion: @escaping (Error?) -> Void) {
+        // 1. Create lightweight BroadcastSession as factory for IVSCustomImageSource
+        do {
+            let config = IVSPresets.configurations().standardPortrait()
+            screenShareBroadcastSession = try IVSBroadcastSession(
+                configuration: config,
+                descriptors: nil,
+                delegate: nil
+            )
+        } catch {
+            completion(error)
+            return
+        }
+
+        guard let factory = screenShareBroadcastSession else {
+            completion(NSError(domain: "IVSStageError", code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create broadcast session factory"]))
+            return
+        }
+
+        // 2. Create custom image source
+        let customSource = factory.createImageSource(withName: "screenShare")
+        screenShareCustomSource = customSource
+
+        // 3. Start Unix socket server
+        let server = BroadcastScreenShareServer(appGroupIdentifier: appGroup)
+        broadcastServer = server
+
+        let screenShareToken = token
+
+        // 4. Wire server callbacks
+        server.onSampleBuffer = { [weak self] sampleBuffer in
+            self?.screenShareCustomSource?.onSampleBuffer(sampleBuffer)
+        }
+
+        server.onBroadcastStarted = { [weak self] in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                print("Ivsstage: Broadcast extension started")
+
+                let screenStream = IVSLocalStageStream(device: customSource)
+                self.screenShareStream = screenStream
+
+                if let token = screenShareToken {
+                    // Dual-stage mode
+                    do {
+                        let strategy = ScreenShareStageStrategy(manager: self)
+                        self.screenShareStrategy = strategy
+                        let ssStage = try IVSStage(token: token, strategy: strategy)
+                        ssStage.addRenderer(ScreenShareStageRenderer(manager: self))
+                        try ssStage.join()
+                        self.screenShareStage = ssStage
+                        print("Ivsstage: Screen share stage joined (dual-stage mode)")
+                    } catch {
+                        print("Ivsstage: Failed to join screen share stage: \(error)")
+                        self.cleanupScreenShare()
+                        return
+                    }
+                } else {
+                    // Single-stage fallback
+                    var currentStreams = self.localStreams
+                    currentStreams.append(screenStream)
+                    self.localStreams = currentStreams
+
+                    self.stage?.refreshStrategy()
+
+                    let screenShareParticipant = ParticipantData(
+                        isLocal: false,
+                        participantId: StageManager.screenShareParticipantId
+                    )
+                    screenShareParticipant.publishState = .published
+                    screenShareParticipant.subscribeState = .subscribed
+                    screenShareParticipant.streams = [screenStream]
+                    self.participantsData.append(screenShareParticipant)
+                }
+
+                self.isScreenSharing = true
+                self.delegate?.stageManager(self, didChangeScreenShareState: true)
+            }
+        }
+
+        server.onBroadcastStopped = { [weak self] in
+            DispatchQueue.main.async {
+                print("Ivsstage: Broadcast extension stopped")
+                self?.cleanupScreenShare()
+            }
+        }
+
+        // 5. Start server and show broadcast picker
+        server.start()
+        if let extensionId = broadcastExtensionBundleId, !extensionId.isEmpty {
+            server.showBroadcastPicker(extensionBundleId: extensionId)
+        }
+
+        // Completion returns immediately; actual start happens async via Darwin notification
+        completion(nil)
+    }
+
+    // MARK: In-App Screen Share (RPScreenRecorder fallback)
+
+    private func startInAppScreenShare(token: String?, completion: @escaping (Error?) -> Void) {
         // 1. Create lightweight BroadcastSession as factory for IVSCustomImageSource
         do {
             let config = IVSPresets.configurations().standardPortrait()
@@ -613,6 +742,14 @@ class StageManager: NSObject {
 
     func stopScreenShare() {
         guard isScreenSharing else { return }
+
+        if broadcastServer != nil {
+            // Broadcast extension mode: just cleanup (extension stops independently)
+            cleanupScreenShare()
+            return
+        }
+
+        // In-app RPScreenRecorder mode
         RPScreenRecorder.shared().stopCapture { [weak self] error in
             if let error = error {
                 print("Ivsstage: Error stopping screen capture: \(error)")
@@ -622,6 +759,10 @@ class StageManager: NSObject {
     }
 
     private func cleanupScreenShare() {
+        // Stop broadcast extension server if active
+        broadcastServer?.stop()
+        broadcastServer = nil
+
         let wasDualStage = screenShareStage != nil
 
         // Leave and destroy screen share stage (dual-stage mode)
@@ -649,6 +790,9 @@ class StageManager: NSObject {
 
         let wasSharing = isScreenSharing
         isScreenSharing = false
+
+        // End background task since screen share stopped
+        endBackgroundTaskIfNeeded()
 
         stage?.refreshStrategy()
 
