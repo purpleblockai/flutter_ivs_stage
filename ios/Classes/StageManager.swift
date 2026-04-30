@@ -144,12 +144,12 @@ class StageManager: NSObject {
         let devices = IVSDeviceDiscovery().listLocalDevices()
         camera = devices.compactMap({ $0 as? IVSCamera }).first
         microphone = devices.compactMap({ $0 as? IVSMicrophone }).first
-        
-        // Use `IVSStageAudioManager` to control the underlying AVAudioSession instance
-        IVSStageAudioManager.sharedInstance().setPreset(.videoChat)
-        IVSStageAudioManager.sharedInstance().isEchoCancellationEnabled = false
+
+        // Audio session preset is configured at joinStage time, AFTER CallKit has
+        // activated AVAudioSession. Doing it in init() races CallKit and leaves the
+        // session in a state IVS can't capture from.
         super.init()
-        
+
         camera?.errorDelegate = self
         microphone?.errorDelegate = self
         setupLocalUser()
@@ -313,10 +313,23 @@ class StageManager: NSObject {
     
     // MARK: - Public Methods
     
+    private func prepareAudio() {
+        // Configure IVS's preset on each join. CallKit (or LiveKit on the other
+        // SDK path) may have set a different mode; re-asserting .videoChat here
+        // ensures IVS captures from the same session that's already active.
+        // AEC must stay ON: iOS only opens the loudspeaker amplifier to max
+        // gain when HW echo cancellation is engaged. With AEC disabled, iOS
+        // caps speaker output to prevent feedback into the live mic — the
+        // root cause of the low-volume symptom on the IVS path.
+        IVSStageAudioManager.sharedInstance().setPreset(.videoChat)
+        IVSStageAudioManager.sharedInstance().isEchoCancellationEnabled = true
+    }
+
     func joinStage(token: String, completion: @escaping (Error?) -> Void) {
         UserDefaults.standard.set(token, forKey: "joinToken")
         cancelAllRemoteAttachRetries()
-        
+        prepareAudio()
+
         do {
             stage?.leave()
             self.stage = nil
