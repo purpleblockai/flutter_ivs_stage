@@ -217,16 +217,19 @@ public class FlutterIvsStagePlugin: NSObject, FlutterPlugin {
             }
 
         case "setSpeakerphoneOn":
+            // iOS hot path is `CallKitBridge.setAudioRoute` from Dart, not this
+            // method-channel call. Delegate to CallKitProvider via the
+            // cross-module requestRoute notification so there's a single iOS
+            // routing engine — bare AVAudioSession.overrideOutputAudioPort is
+            // unsafe while the IVS Stage SDK owns the session.
             if let args = call.arguments as? [String: Any],
                let on = args["on"] as? Bool {
-                let session = AVAudioSession.sharedInstance()
-                do {
-                    try session.overrideOutputAudioPort(on ? .speaker : .none)
-                    result(nil)
-                } catch {
-                    result(FlutterError(code: "AUDIO_OUTPUT_FAILED",
-                        message: error.localizedDescription, details: nil))
-                }
+                NotificationCenter.default.post(
+                    name: Notification.Name("infotelecast.audio.requestRoute"),
+                    object: nil,
+                    userInfo: ["deviceId": on ? "speaker" : "earpiece"]
+                )
+                result(nil)
             } else {
                 result(FlutterError(code: "INVALID_ARGUMENTS",
                     message: "'on' boolean is required", details: nil))
@@ -235,41 +238,12 @@ public class FlutterIvsStagePlugin: NSObject, FlutterPlugin {
         case "selectAudioOutput":
             if let args = call.arguments as? [String: Any],
                let deviceId = args["deviceId"] as? String {
-                let session = AVAudioSession.sharedInstance()
-                let lowerId = deviceId.lowercased().trimmingCharacters(in: .whitespaces)
-
-                if lowerId == "speaker" {
-                    do {
-                        try session.overrideOutputAudioPort(.speaker)
-                        result(nil)
-                    } catch {
-                        result(FlutterError(code: "AUDIO_OUTPUT_FAILED",
-                            message: error.localizedDescription, details: nil))
-                    }
-                } else {
-                    // Clear speaker override first
-                    try? session.overrideOutputAudioPort(.none)
-
-                    // Try to find a matching input port (Bluetooth, headset, etc.)
-                    if let availableInputs = session.availableInputs {
-                        for port in availableInputs {
-                            if port.uid == deviceId || port.portName.lowercased() == lowerId {
-                                do {
-                                    try session.setPreferredInput(port)
-                                    result(nil)
-                                    return
-                                } catch {
-                                    result(FlutterError(code: "AUDIO_OUTPUT_FAILED",
-                                        message: error.localizedDescription, details: nil))
-                                    return
-                                }
-                            }
-                        }
-                    }
-                    // No matching port found — clear preferred input (use default)
-                    try? session.setPreferredInput(nil)
-                    result(nil)
-                }
+                NotificationCenter.default.post(
+                    name: Notification.Name("infotelecast.audio.requestRoute"),
+                    object: nil,
+                    userInfo: ["deviceId": deviceId]
+                )
+                result(nil)
             } else {
                 result(FlutterError(code: "INVALID_ARGUMENTS",
                     message: "deviceId is required", details: nil))

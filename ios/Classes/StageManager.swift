@@ -1,7 +1,16 @@
 import Foundation
 import AmazonIVSBroadcast
+import AVFoundation
 import UIKit
 import ReplayKit
+
+// Cross-module notification names — string-equal to the constants on
+// CallKitProvider.AudioNotifications in the Runner target. Module boundaries
+// prevent shared Swift types between this plugin and Runner; both sides
+// string-compare these names.
+private let kIVSOwnershipNotification = Notification.Name("infotelecast.audio.ivsOwnership")
+private let kApplyIVSRouteNotification = Notification.Name("infotelecast.audio.applyIVSRoute")
+private let kPreferredRouteUserDefaultsKey = "infotelecast.audio.preferredRoute"
 
 protocol StageManagerDelegate: AnyObject {
     func stageManager(_ manager: StageManager, didUpdateParticipants participants: [ParticipantData])
@@ -162,6 +171,15 @@ class StageManager: NSObject {
                                                selector: #selector(applicationWillEnterForeground),
                                                name: UIApplication.willEnterForegroundNotification,
                                                object: nil)
+        // Listen for apply-route requests from CallKitProvider. The IVS Stage
+        // SDK owns AVAudioSession on iOS, so all route changes while a Stage
+        // is live must go through IVSStageAudioManager.setCategory / setPreset
+        // — calling AVAudioSession.overrideOutputAudioPort directly gets stomped
+        // by the SDK's internal preset re-application.
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(handleApplyIVSRoute(_:)),
+                                               name: kApplyIVSRouteNotification,
+                                               object: nil)
     }
 
     private func ensureLocalParticipantEntry() -> ParticipantData {
@@ -314,20 +332,107 @@ class StageManager: NSObject {
     // MARK: - Public Methods
     
     private func prepareAudio() {
-        // Configure IVS's preset on each join. CallKit (or LiveKit on the other
-        // SDK path) may have set a different mode; re-asserting .videoChat here
-        // ensures IVS captures from the same session that's already active.
-        // AEC must stay ON: iOS only opens the loudspeaker amplifier to max
-        // gain when HW echo cancellation is engaged. With AEC disabled, iOS
-        // caps speaker output to prevent feedback into the live mic — the
-        // root cause of the low-volume symptom on the IVS path.
-        IVSStageAudioManager.sharedInstance().setPreset(.videoChat)
-        IVSStageAudioManager.sharedInstance().isEchoCancellationEnabled = true
+        // Configure IVS's audio session on each join. Respect the user's
+        // last-selected output: if they picked Earpiece previously, joining
+        // (or rejoining) a Stage must not stomp it back to speaker. Routing
+        // is done exclusively via IVSStageAudioManager — bare AVAudioSession
+        // calls on top of the SDK trigger SDK reverts and HUD/latency
+        // artifacts (see memory: feedback_ivs_avaudiosession.md).
+        applyIVSAudioRoute(routeFromUserDefaults())
+    }
+
+    /// Apply a route change posted by CallKitProvider while an IVS Stage is the
+    /// active audio backend. The IVSStageAudioManager call alone is sufficient
+    /// — the SDK's internal engine reconfigure resolves the route. Layering
+    /// AVAudioSession.overrideOutputAudioPort or setPreferredInput on top
+    /// caused production regressions previously and is intentionally avoided.
+    @objc
+    private func handleApplyIVSRoute(_ note: Notification) {
+        guard let info = note.userInfo,
+              let route = info["route"] as? String else { return }
+        let uid = info["uid"] as? String
+        let resolved: String
+        if route == "external", let uid = uid {
+            resolved = "external:\(uid)"
+        } else {
+            resolved = route
+        }
+        applyIVSAudioRoute(resolved)
+    }
+
+    /// Single source of truth for IVS audio routing. Accepts the persisted
+    /// route format ("speaker" / "earpiece" / "external:<uid>"). All routes
+    /// keep AEC ON — iOS only opens the loudspeaker amplifier to max gain
+    /// when HW echo cancellation is engaged.
+    private func applyIVSAudioRoute(_ route: String) {
+        let mgr = IVSStageAudioManager.sharedInstance()
+        if route == "earpiece" {
+            // .voiceChat is the only mode that both engages voice processing
+            // (AEC) and does NOT carry the implicit .defaultToSpeaker that
+            // .videoChat / setPreset(.videoChat) do. setCategory itself
+            // triggers the SDK's engine reconfigure which resolves the route
+            // to the receiver — no override needed.
+            mgr.setCategory(.playAndRecord,
+                            options: [.allowBluetooth, .allowBluetoothA2DP, .allowAirPlay],
+                            mode: .voiceChat)
+            mgr.isEchoCancellationEnabled = true
+            print("Ivsstage: applyIVSAudioRoute → setCategory(.voiceChat) (earpiece)")
+        } else if route.hasPrefix("external:") {
+            // External port — the IVS SDK doesn't expose a setPreferredInput
+            // shim, so we still need one bare call here. Memory's prohibition
+            // on layering applies to the earpiece path specifically.
+            let uid = String(route.dropFirst("external:".count))
+            mgr.setCategory(.playAndRecord,
+                            options: [.allowBluetooth, .allowBluetoothA2DP, .allowAirPlay],
+                            mode: .videoChat)
+            mgr.isEchoCancellationEnabled = true
+            let session = AVAudioSession.sharedInstance()
+            if let port = findInputPort(uid: uid, in: session) {
+                try? session.setPreferredInput(port)
+                print("Ivsstage: applyIVSAudioRoute → external port=\(port.portName)")
+            } else {
+                print("Ivsstage: applyIVSAudioRoute → external uid=\(uid) not found")
+            }
+        } else {
+            // Default / explicit speaker — the SDK preset bundles
+            // .playAndRecord + .defaultToSpeaker + mode .videoChat + AEC.
+            mgr.setPreset(.videoChat)
+            mgr.isEchoCancellationEnabled = true
+            print("Ivsstage: applyIVSAudioRoute → setPreset(.videoChat) (speaker)")
+        }
+    }
+
+    private func routeFromUserDefaults() -> String {
+        return UserDefaults.standard.string(forKey: kPreferredRouteUserDefaultsKey) ?? "speaker"
+    }
+
+    private func findInputPort(uid: String, in session: AVAudioSession) -> AVAudioSessionPortDescription? {
+        let needle = uid.lowercased()
+        return session.availableInputs?.first { input in
+            let portUid = input.uid.lowercased()
+            let portName = input.portName.lowercased()
+            let portType = input.portType.rawValue.lowercased()
+            return portUid == needle ||
+                portName == needle ||
+                portType == needle ||
+                portUid.contains(needle) ||
+                needle.contains(portUid) ||
+                portName.contains(needle) ||
+                needle.contains(portType)
+        }
     }
 
     func joinStage(token: String, completion: @escaping (Error?) -> Void) {
         UserDefaults.standard.set(token, forKey: "joinToken")
         cancelAllRemoteAttachRetries()
+        // Tell CallKitProvider that the IVS Stage SDK now owns AVAudioSession.
+        // It will dispatch future setAudioRoute calls to us via the
+        // applyIVSRoute notification rather than mutating AVAudioSession
+        // directly. Posted BEFORE prepareAudio so any re-settle that
+        // CallKitProvider triggers in response lands on the IVS path.
+        NotificationCenter.default.post(name: kIVSOwnershipNotification,
+                                        object: nil,
+                                        userInfo: ["active": true])
         prepareAudio()
 
         do {
@@ -377,7 +482,15 @@ class StageManager: NSObject {
         
         delegate?.stageManager(self, didUpdateParticipants: [])
         delegate?.stageManager(self, didChangeConnectionState: .disconnected)
-        
+
+        // Hand AVAudioSession ownership back to CallKitProvider's WebRTC path
+        // so any subsequent LiveKit room or audio route change flows through
+        // RTCAudioSession instead of being dispatched to this (now-torn-down)
+        // IVS handler.
+        NotificationCenter.default.post(name: kIVSOwnershipNotification,
+                                        object: nil,
+                                        userInfo: ["active": false])
+
         print("Ivsstage: Stage left and cleaned up")
     }
     
